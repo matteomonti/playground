@@ -1,51 +1,29 @@
-use rand::RngCore;
-use std::time::Instant;
+use memmap::MmapOptions;
+use std::{fs::File, hint::black_box, iter, os::unix::prelude::MetadataExt, time::Instant};
 
-fn ids(
-    buffer: &[u8],
-    ids_per_chunk: usize,
-    id_bytes: usize,
-    suffix_bits: u64,
-    suffix: u64,
-) -> Vec<u64> {
-    let mut output = Vec::with_capacity(150000);
+fn gather(bytes: &[u8], block_size: usize, reads: &[usize]) -> Vec<u8> {
+    let mut gathered = Vec::with_capacity(reads.len() * block_size);
 
-    for chunk in buffer.chunks(1024) {
-        for prefix in chunk.chunks(id_bytes).take(ids_per_chunk) {
-            let mut buffer = [0u8; 8];
-            buffer[0..id_bytes].copy_from_slice(prefix);
-
-            let id = u64::from_le_bytes(buffer);
-            let id = (id << suffix_bits) | suffix;
-
-            output.push(id);
-        }
+    for read in reads {
+        gathered.extend_from_slice(&bytes[(read * block_size)..((read + 1) * block_size)]);
     }
 
-    output
+    gathered
 }
 
 fn main() {
-    loop {
-        let buffers = (0..1000)
-            .map(|_| {
-                let mut buffer = vec![0u8; 1580032];
-                rand::thread_rng().fill_bytes(buffer.as_mut_slice());
-                buffer
-            })
-            .collect::<Vec<_>>();
+    let file = File::open("/home/mmonti/blob.bin").unwrap();
+    let metadata = file.metadata().unwrap();
 
-        let start = Instant::now();
+    let block_size = metadata.blksize() as usize;
+    let blocks = metadata.len() as usize / block_size;
 
-        for buffer in buffers {
-            let ids = ids(buffer.as_slice(), 85, 3, 11, 574);
-            
-            if rand::random::<u64>() == 0 {
-                println!("Len: {}", ids.len());
-                println!("Sum: {:?}", ids.into_iter().sum::<u64>());
-            }
-        }
+    let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
+    let reads = iter::repeat_with(|| rand::random::<usize>() % blocks)
+        .take(32000)
+        .collect::<Vec<_>>();
 
-        println!("Elapsed: {:?}", start.elapsed());
-    }
+    let start = Instant::now();
+    let _gathered = black_box(gather(&mmap, block_size, reads.as_slice()));
+    println!("Elapsed: {:?}", start.elapsed());
 }
